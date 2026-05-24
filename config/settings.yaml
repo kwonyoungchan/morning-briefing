@@ -7,8 +7,9 @@ news:
   article_count: 5
 
 weather:
-  city: "Seoul"
-  units: "metric"
+  city: "서울"
+  nx: 60   # 기상청 격자 X 좌표
+  ny: 127  # 기상청 격자 Y 좌표
 
 schedule:
   timezone: "Asia/Seoul"

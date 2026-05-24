@@ -1,8 +1,8 @@
 # 설계 명세서: 매일 아침 뉴스/날씨 디스코드 알림 시스템
 
-**버전**: 1.0  
+**버전**: 1.1  
 **작성일**: 2026-05-24  
-**상태**: 설계 단계
+**상태**: 구현 완료
 
 ---
 
@@ -17,7 +17,7 @@
 | 실행 주기 | 매일 1회 (기본: 오전 7시 KST) |
 | 알림 채널 | Discord Webhook |
 | 뉴스 소스 | NewsAPI.org |
-| 날씨 소스 | OpenWeatherMap API |
+| 날씨 소스 | 기상청 단기예보 API (data.go.kr) |
 | 실행 환경 | GitHub Actions (서버리스) |
 | 구현 언어 | Python 3.11 |
 
@@ -99,7 +99,7 @@ cron: '0 22 * * *'   # UTC 22:00 = KST 07:00
 | Secret 이름 | 설명 |
 |-------------|------|
 | `NEWS_API_KEY` | NewsAPI.org API 키 |
-| `WEATHER_API_KEY` | OpenWeatherMap API 키 |
+| `WEATHER_API_KEY` | 기상청 단기예보 API 키 (data.go.kr) |
 | `DISCORD_WEBHOOK_URL` | Discord Webhook URL |
 
 ---
@@ -110,20 +110,32 @@ cron: '0 22 * * *'   # UTC 22:00 = KST 07:00
 
 ```yaml
 news:
-  keywords:           # 관심 키워드 목록
+  keywords:
     - "AI"
     - "개발"
     - "테크"
-  language: "ko"      # 뉴스 언어 (ko / en)
-  article_count: 5    # 표시할 기사 수
+  language: "ko"
+  article_count: 5
 
 weather:
-  city: "Seoul"       # 날씨 조회 도시
-  units: "metric"     # 온도 단위 (metric = 섭씨)
+  city: "서울"     # 표시 이름
+  nx: 60           # 기상청 격자 X 좌표
+  ny: 127          # 기상청 격자 Y 좌표
 
 schedule:
   timezone: "Asia/Seoul"
 ```
+
+**주요 도시 격자 좌표**
+| 도시 | nx | ny |
+|------|----|----- |
+| 서울 | 60 | 127 |
+| 부산 | 98 | 76 |
+| 대구 | 89 | 90 |
+| 인천 | 55 | 124 |
+| 광주 | 58 | 74 |
+| 대전 | 67 | 100 |
+| 제주 | 52 | 38 |
 
 ---
 
@@ -165,38 +177,58 @@ schedule:
 
 ### 4.4 날씨 수집 모듈 (`weather.py`)
 
-**역할**: OpenWeatherMap에서 현재 날씨 및 오늘 예보 가져오기
+**역할**: 기상청 단기예보 API에서 현재 날씨 및 오늘 예보 수집
 
 **사용 API**
-- 현재 날씨: `GET https://api.openweathermap.org/data/2.5/weather`
-- 일일 예보: `GET https://api.openweathermap.org/data/2.5/forecast`
+- 초단기실황: `GET http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst`
+- 단기예보: `GET http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst`
+
+**공통 요청 파라미터**
+| 파라미터 | 값 |
+|----------|----|  
+| `serviceKey` | data.go.kr 발급 API 키 (URL 디코딩 적용) |
+| `dataType` | `JSON` |
+| `nx` | settings.yaml의 격자 X 좌표 |
+| `ny` | settings.yaml의 격자 Y 좌표 |
+| `base_date` | KST 기준 오늘 날짜 (YYYYMMDD) |
+| `base_time` | 가장 최근 발표 시각 (10분 여유 적용) |
+
+**API별 역할 분담**
+| API | 수집 항목 |
+|-----|----------|
+| 초단기실황 (`getUltraSrtNcst`) | T1H(현재기온), REH(습도), PTY(강수형태) |
+| 단기예보 (`getVilageFcst`) | TMN(최저기온), TMX(최고기온), POP(강수확률), SKY(하늘상태) |
+
+**단기예보 발표 시각**: 0200, 0500, 0800, 1100, 1400, 1700, 2000, 2300 (KST)
 
 **반환 데이터 구조**
 ```python
 {
-    "city": "Seoul",
-    "condition": "맑음",           # 날씨 상태 (한국어 변환)
-    "temp_current": 18,            # 현재 온도 (°C)
-    "temp_min": 14,                # 오늘 최저 온도
-    "temp_max": 23,                # 오늘 최고 온도
-    "humidity": 60,                # 습도 (%)
-    "rain_probability": 10,        # 강수 확률 (%)
-    "emoji": "☀️"                  # 날씨 상태 이모지
+    "city": "서울",
+    "condition": "맑음",
+    "temp_current": 18,
+    "temp_min": 14,
+    "temp_max": 23,
+    "humidity": 60,
+    "rain_probability": 10,
+    "emoji": "☀️"
 }
 ```
 
 **날씨 상태 → 이모지 매핑**
-| 상태 | 이모지 |
-|------|--------|
-| 맑음 | ☀️ |
-| 구름 | ☁️ |
-| 비 | 🌧️ |
-| 눈 | ❄️ |
-| 천둥 | ⛈️ |
-| 안개 | 🌫️ |
+| PTY(강수형태) | 상태 | 이모지 |
+|---|---|---|
+| 1 | 비 | 🌧️ |
+| 2 | 비/눈 | 🌨️ |
+| 3 | 눈 | ❄️ |
+| 4 | 소나기 | 🌦️ |
+| 0 + SKY 1 | 맑음 | ☀️ |
+| 0 + SKY 3 | 구름많음 | ⛅ |
+| 0 + SKY 4 | 흐림 | ☁️ |
 
 **에러 처리**
-- API 실패 시 날씨 섹션 전체를 "날씨 정보를 불러올 수 없습니다." 로 대체
+- 초단기실황 실패 시 `None` 반환 → formatter에서 대체 텍스트 처리
+- 단기예보 실패 시 빈 dict 반환 → 현재 기온으로 min/max 대체
 - 타임아웃: 10초
 
 ---
@@ -209,14 +241,13 @@ schedule:
 ```json
 {
   "username": "Morning Briefing Bot",
-  "avatar_url": "(선택) 봇 아이콘 URL",
   "embeds": [
     {
       "title": "☀️ 2026년 5월 24일 토요일 모닝 브리핑",
       "color": 16776960,
       "fields": [
         {
-          "name": "🌤️ 오늘의 날씨 — Seoul",
+          "name": "🌤️ 오늘의 날씨 — 서울",
           "value": "...",
           "inline": false
         },
@@ -261,13 +292,6 @@ schedule:
 
 **역할**: 포맷된 payload를 Discord Webhook으로 HTTP POST
 
-**요청 스펙**
-```
-POST {DISCORD_WEBHOOK_URL}
-Content-Type: application/json
-Body: formatter.py의 반환값
-```
-
 **재시도 전략**
 - 최대 재시도 횟수: 3회
 - 재시도 간격: 5초
@@ -279,16 +303,6 @@ Body: formatter.py의 반환값
 ### 4.7 오케스트레이터 (`main.py`)
 
 **역할**: 전체 흐름 제어 및 에러 총괄
-
-**실행 흐름**
-```
-1. settings.yaml 로드
-2. news.py → 뉴스 데이터 수집
-3. weather.py → 날씨 데이터 수집
-4. formatter.py → Discord payload 생성
-5. notifier.py → Discord 전송
-6. 성공/실패 여부 exit code로 반환
-```
 
 **부분 실패 정책**
 - 뉴스 수집 실패 → 날씨만으로 메시지 전송 (계속 진행)
@@ -302,7 +316,7 @@ Body: formatter.py의 반환값
 | API | 무료 플랜 한도 | 사용 횟수/일 |
 |-----|--------------|------------|
 | NewsAPI.org | 100건/일 | 1건 |
-| OpenWeatherMap | 1,000건/일 | 2건 (현재 + 예보) |
+| 기상청 단기예보 (data.go.kr) | 10,000건/일 | 2건 (초단기실황 + 단기예보) |
 | Discord Webhook | 제한 없음 (Rate limit: 30건/분) | 1건 |
 
 ---
@@ -326,7 +340,7 @@ Body: formatter.py의 반환값
 ☀️ 2026년 5월 24일 토요일 모닝 브리핑
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
-🌤️ 오늘의 날씨 — Seoul
+🌤️ 오늘의 날씨 — 서울
 ☀️ 맑음  |  현재 18°C  |  최저 14°C / 최고 23°C
 💧 습도 60%  |  🌂 강수확률 10%
 
@@ -338,14 +352,14 @@ Body: formatter.py의 반환값
 5. [클라우드 서비스 시장 전망](https://...) — ZDNet Korea
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
-NewsAPI · OpenWeatherMap | 매일 오전 7시 업데이트
+NewsAPI · 기상청 단기예보 | 매일 오전 7시 업데이트
 ```
 
 ---
 
 ## 8. 확장 포인트 (현재 범위 외, 추후 고려)
 
-- **Claude API 연동**: 뉴스 요약 품질 향상 (현재는 NewsAPI description 그대로 사용)
+- **Claude API 연동**: 뉴스 요약 품질 향상
 - **다중 키워드 채널 분리**: 키워드별 Discord 채널로 분류 전송
 - **주간 요약**: 매주 월요일에 지난주 주요 뉴스 요약 전송
 - **사용자 설정 UI**: settings.yaml 대신 웹 인터페이스로 관심사 변경
@@ -367,51 +381,9 @@ NewsAPI · OpenWeatherMap | 매일 오전 7시 업데이트
 | 기본 브랜치 | `main` |
 | PR 브랜치 | `feat/initial-structure` |
 
-### 9.3 초기 커밋에 포함할 파일
+### 9.3 플레이스홀더 작성 규칙
 
-```
-morning-briefing/
-├── .github/
-│   └── workflows/
-│       └── morning_briefing.yml   # 트리거·시크릿 주입 구조만 작성, 실행 단계 미구현
-├── src/
-│   ├── main.py                    # 모듈 임포트 스텁 + TODO 주석
-│   ├── news.py                    # 함수 시그니처 + TODO 주석
-│   ├── weather.py                 # 함수 시그니처 + TODO 주석
-│   ├── formatter.py               # 함수 시그니처 + TODO 주석
-│   └── notifier.py                # 함수 시그니처 + TODO 주석
-├── config/
-│   └── settings.yaml              # 섹션 4.2의 기본값으로 채워진 실제 파일
-├── requirements.txt               # requests, PyYAML 명시
-├── README.md                      # 프로젝트 개요 및 실행 방법
-└── CLAUDE.md                      # Claude Code 작업 가이드
-```
-
-### 9.4 PR 작성 규칙
-
-- **PR 제목**: `feat: 프로젝트 초기 구조 설정`
-- **PR 본문**:
-  - 구현된 내용: 디렉토리 구조 및 파일 골격
-  - 미구현 항목: 각 모듈의 실제 로직 (TODO로 표시)
-  - 연관 문서: `morning-briefing-design.md` 참조
-- **라벨**: `skeleton`, `no-review-needed`
-
-### 9.5 플레이스홀더 작성 규칙
-
-각 `.py` 파일은 아래 패턴을 따른다.
-
-```python
-# src/news.py
-import requests
-from typing import Any
-
-def fetch_news(settings: dict) -> list[dict[str, Any]]:
-    """뉴스 수집: 설계 명세서 섹션 4.3 참조"""
-    # TODO: implement
-    raise NotImplementedError
-```
-
-`morning_briefing.yml`은 트리거와 Secrets 주입 구조만 포함하고 `run` 단계는 `echo "TODO"` 로 대체한다.
+각 `.py` 파일은 함수 시그니처 + docstring + `raise NotImplementedError` 패턴을 따른다.
 
 ---
 
