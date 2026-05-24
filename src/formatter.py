@@ -26,13 +26,14 @@ def build_payload(
     ]
 
     return {
+        "content": "@here",
         "username": "Morning Briefing Bot",
         "embeds": [
             {
                 "title": title,
                 "color": color,
                 "fields": fields,
-                "footer": {"text": "NewsAPI · OpenWeatherMap | 매일 오전 7시 업데이트"},
+                "footer": {"text": "NewsAPI · 기상청 단기예보 | 매일 오전 7시 업데이트"},
                 "timestamp": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
         ],
