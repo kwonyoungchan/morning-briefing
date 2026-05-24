@@ -1,0 +1,14 @@
+news:
+  keywords:
+    - "AI"
+    - "개발"
+    - "테크"
+  language: "ko"
+  article_count: 5
+
+weather:
+  city: "Seoul"
+  units: "metric"
+
+schedule:
+  timezone: "Asia/Seoul"
