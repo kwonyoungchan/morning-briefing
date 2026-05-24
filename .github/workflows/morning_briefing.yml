@@ -24,4 +24,4 @@ jobs:
           NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
           WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: echo "TODO"
+        run: python src/main.py
