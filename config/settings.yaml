@@ -1,8 +1,13 @@
 news:
   keywords:
-    - "AI"
-    - "개발"
+    # IT
+    - "IT"
     - "테크"
+    - "인공지능"
+    - "소프트웨어"
+    # Game
+    - "게임"
+    - "e스포츠"
   language: "ko"
   article_count: 5
 
